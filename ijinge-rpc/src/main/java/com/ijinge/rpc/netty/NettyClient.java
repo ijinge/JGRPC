@@ -22,9 +22,11 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -36,10 +38,11 @@ public class NettyClient implements IjingeClient {
     private final EventLoopGroup eventLoopGroup;
     private  UnprocessedRequests unprocessedRequests;
     private NacosTemplate nacosTemplate;
+    @Setter
     private RpcConfig rpcConfig;
 
     // 读快 写慢 不适用于存取大量数据  并且写多的场景
-    // 用于缓存
+    // 如果nacos挂掉了从缓存中获取服务方方法实例
     private static final Set<String> SERVICES= new CopyOnWriteArraySet<>();
 
     public NettyClient(){
@@ -62,34 +65,55 @@ public class NettyClient implements IjingeClient {
                 });
     }
 
-    public void setRpcConfig(RpcConfig rpcConfig) {
-        this.rpcConfig = rpcConfig;
-    }
-
     @Override
     public Object sendRequest(Request request) {
         //1. 连接netty服务，获取channel
 //        InetSocketAddress inetSocketAddress = new InetSocketAddress(host, port);
         //通过注册中心获取主机和端口
         String serviceName = request.getInterfaceName() + request.getVersion();
+        InetSocketAddress inetSocketAddress = null;
         Instance oneHealthyInstance = null;
-        try {
-            log.debug("寻找的服务名称：{}",serviceName);
-            log.debug("nacos服务器源{}",rpcConfig.getNacosPort());
-
-            oneHealthyInstance = nacosTemplate.getOneHealthyInstance(serviceName,rpcConfig.getNacosGroup());
-        } catch (Exception e) {
-            throw new RpcException("没有获取到可用的服务提供者");
+        if(!SERVICES.isEmpty()){
+            //有缓存的服务提供者服务器，直接获取
+            //随机获取一个
+            Optional<String> optional = SERVICES.stream().skip(SERVICES.size() - 1).findFirst();
+            if (optional.isPresent()){
+                String ipAndPort = optional.get();
+                String[] split = ipAndPort.split(":");
+                inetSocketAddress = new InetSocketAddress(split[0],Integer.parseInt(split[1]));
+                log.info("走了缓存的服务提供者地址，省去了连接nacos的过程...");
+            }
         }
-        InetSocketAddress inetSocketAddress = new InetSocketAddress(oneHealthyInstance.getIp(), oneHealthyInstance.getPort());
+        if (inetSocketAddress == null){
 
-        CompletableFuture<Channel> completableFuture = new CompletableFuture<>();
+            try {
+                log.debug("寻找的服务名称：{}",serviceName);
+                log.debug("nacos服务器源{}",rpcConfig.getNacosPort());
+                oneHealthyInstance = nacosTemplate.getOneHealthyInstance(serviceName,rpcConfig.getNacosGroup());
+            } catch (Exception e) {
+                throw new RpcException("没有获取到可用的服务提供者");
+            }
+            //从nacos获取实例后，将其缓存起来
+            SERVICES.add(oneHealthyInstance.getIp()+":"+oneHealthyInstance.getPort());
+            // 连接地址、端口
+            inetSocketAddress = new InetSocketAddress(oneHealthyInstance.getIp(), oneHealthyInstance.getPort());
+        }
+
         //连接
+        CompletableFuture<Channel> completableFuture = new CompletableFuture<>();
+
         bootstrap.connect(inetSocketAddress).addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()){
                 //代表连接成功，将channel放入任务中
                 completableFuture.complete(future.channel());
             }else {
+                //连接失败 从 缓存中 去除
+                // address : /10.147.20.168:13568
+                String address = future.channel().remoteAddress().toString().substring(1);
+                SERVICES.remove(address);
+                log.info("删除provider服务缓存成功...");
+                //标识 任务失败
+                completableFuture.completeExceptionally(future.cause());
                 throw new RpcException("连接服务器失败");
             }
         });
