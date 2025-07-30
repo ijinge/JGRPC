@@ -22,6 +22,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.timeout.IdleStateHandler;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -30,6 +31,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class NettyClient implements IjingeClient {
@@ -58,6 +60,7 @@ public class NettyClient implements IjingeClient {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) throws Exception {
+                        ch.pipeline().addLast(new IdleStateHandler(0,3,0, TimeUnit.SECONDS));
                         ch.pipeline ().addLast ( "decoder",new IjingeRpcDecoder() );
                         ch.pipeline ().addLast ( "encoder",new IjingeRpcEncoder());
                         ch.pipeline ().addLast ( "handler",new IjingeNettyClientHandler() );
@@ -101,6 +104,8 @@ public class NettyClient implements IjingeClient {
 
         //连接
         CompletableFuture<Channel> completableFuture = new CompletableFuture<>();
+
+
 
         bootstrap.connect(inetSocketAddress).addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()){

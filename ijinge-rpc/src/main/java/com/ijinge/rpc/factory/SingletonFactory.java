@@ -47,6 +47,5 @@ public final class SingletonFactory {
                 }
             });
         }
-        while (true){}
     }
 }

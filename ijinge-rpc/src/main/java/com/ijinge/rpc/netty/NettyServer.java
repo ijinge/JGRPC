@@ -40,6 +40,8 @@ public class NettyServer implements IjingeServer {
             eventExecutors = new DefaultEventExecutorGroup(8 * 2,new IjingeRpcThreadFactory(ijingeServiceProvider));
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
+                    // 保持连接
+                    .option(ChannelOption.SO_KEEPALIVE, true)
                     // TCP默认开启了 Nagle 算法，该算法的作用是尽可能的发送大数据快，减少网络传输。TCP_NODELAY 参数的作用就是控制是否启用 Nagle 算法。
                     .option(ChannelOption.SO_BACKLOG,1024)
                     .childOption(ChannelOption.TCP_NODELAY,true)
